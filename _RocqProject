@@ -1,0 +1,13 @@
+# Search paths
+-Q theories fitch
+
+# Prelude: useful background lemmas that are of general shape and interest
+theories/prelude.v
+
+# Core: definitions of proofs, terms, reductions, and translations
+theories/core/deduct.v
+theories/core/reductions.v
+theories/core.v
+
+theories/deduction_lemmas.v
+theories/reduction_lemmas.v
