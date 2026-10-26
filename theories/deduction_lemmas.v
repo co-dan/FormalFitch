@@ -900,7 +900,7 @@ Proof.
     intros [Hin|Hin]%elem_of_app.
     + destruct (IH Hin) as [H1 H2]. split; apply elem_of_app; by left.
     + apply list_elem_of_singleton in Hin. subst l.
-      unfold line_ok in Hlok.
+      unfold line_ok in Hlok. destruct Hlok as [_ Hlok].
       destruct (frame_stack pre) as [|fr [|fr2 rest]] eqn:Hstk; try done.
       destruct Hlok as [Hh Hlst].
       remember (frame_lines fr) as fl eqn:Hfl.
@@ -1066,7 +1066,8 @@ Proof.
   destruct s as [A l|A l|l1 l2|A j l]; simpl.
   - intros _ Hi. by apply elem_of_nil in Hi.
   - intros _ Hi. by apply elem_of_nil in Hi.
-  - destruct (frame_stack pre) as [|fr [|fr2 rest]] eqn:Hstk;
+  - intros [_ Hok]. revert Hok.
+    destruct (frame_stack pre) as [|fr [|fr2 rest]] eqn:Hstk;
       [by intros []|by intros []|].
     intros [Hhd Hlst] Hi.
     assert (Hscope : forall f k, (f, k) ∈ frame_lines fr ->

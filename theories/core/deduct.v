@@ -297,12 +297,25 @@ Definition just_ok (pre : prededuct) (f : frml) (j : just) : Prop :=
    the prefix `pre` *)
 Definition line_ok (pre : prededuct) (l : line) : Prop :=
   match l with
-  | Deduce f j _ => just_ok pre f j
-  | Assume _ _ => (* Assumes only come at the beginning *)
+  | Deduce f j _ =>
+    (** A single deduction line is correct if the justification is correct *)
+    just_ok pre f j
+  | Assume _ _ =>
+      (** Assumes only come at the beginning: the whole prefix must be assumes *)
       Forall is_assume pre
-  | Raise _ _ => True
+  | Raise _ _ =>
+      (** Raises are always okay *)
+      True
   | ScopeClose l1 l2 =>
-      (* TODO: pre should contain at least one deduction before *)
+    (** When we close the sub-proof we want to make sure that it is well-formed;
+        1. the closing statement should come directly after the line `l2`
+        2. the stack of the prefix should contain the top frame,
+           and the top frame should be of the form [(A,l1)...(B,l2)]
+    *)
+    match last pre with
+    |  Some (Deduce _ _ l) => l = l2
+    | _ => False end
+         /\
     match frame_stack pre with
     | fr :: _ :: _ =>
       option_map snd (head (frame_lines fr)) = Some l1 /\
