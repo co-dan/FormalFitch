@@ -17,6 +17,14 @@ Inductive frml :=
 | fConj : frml -> frml -> frml
 .
 
+Declare Scope frml_scope.
+Delimit Scope frml_scope with F.
+
+Notation "A → B" := (fImpl A B)
+  (at level 99, B at level 200, right associativity) : frml_scope.
+Notation "A ∧ B" := (fConj A B)
+  (at level 80, right associativity) : frml_scope.
+
 #[global] Instance frml_eqdecision : EqDecision frml.
 Proof. solve_decision. Qed.
 
@@ -282,13 +290,19 @@ Definition just_ok (pre : prededuct) (f : frml) (j : just) : Prop :=
   match j with
   | Repeat l0 => (f, l0) ∈ scope pre
   | ConjI l1 l2 =>
-    ∃ f1 f2, (f1, l1) ∈ scope pre ∧ (f2, l2) ∈ scope pre ∧ f = fConj f1 f2
+    ∃ f1 f2, (f1, l1) ∈ scope pre ∧
+             (f2, l2) ∈ scope pre ∧
+               f = (f1 ∧ f2)%F
   | ConjE flag l0 =>
-    ∃ f1 f2, (fConj f1 f2, l0) ∈ scope pre ∧ f = (if flag then f1 else f2)
+    ∃ f1 f2, ((f1 ∧ f2)%F, l0) ∈ scope pre ∧
+             f = (if flag then f1 else f2)
   | ImplI l1 l2 =>
-    ∃ f1 f2, ((f1, l1), (f2, l2)) ∈ sp_scope pre ∧ f = fImpl f1 f2
+    ∃ f1 f2, ((f1, l1), (f2, l2)) ∈ sp_scope pre ∧
+               f = (f1 → f2)%F
   | ImplE l1 l2 =>
-    ∃ f1 f2, (fImpl f1 f2, l1) ∈ scope pre ∧ (f1, l2) ∈ scope pre ∧ f = f2
+    ∃ f1 f2, ((f1 → f2)%F, l1) ∈ scope pre ∧
+             (f1, l2) ∈ scope pre ∧
+             f = f2
   end.
 
 
