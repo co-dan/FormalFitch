@@ -221,9 +221,17 @@ The subproof scope is computed similarly.
 *)
 
 
+(* A closed subproof, as recorded in a frame once it is closed *)
+Record subproof := SubProof {
+  sp_hyp : frml;    (* formula of the subproof's assumption *)
+  sp_start : id;    (* id of its first line (the Raise) *)
+  sp_concl : frml;  (* formula of its last line *)
+  sp_end : id;      (* id of its last line *)
+}.
+
 Record frame := mkFrame {
   frame_lines : list (frml * id);
-  frame_subproofs : list ((frml * id) * (frml * id));
+  frame_subproofs : list subproof;
 }.
 
 (* [frame_step pre stk s] extends the frame stack [stk] with one more
@@ -245,7 +253,7 @@ Definition frame_step (pre : prededuct) (stk : list frame) (s : line) : list fra
     | _ :: fr2 :: rest =>
       match frml_at pre l1, frml_at pre l2 with
       | Some f1, Some f2 =>
-        mkFrame (frame_lines fr2) (frame_subproofs fr2 ++ [((f1, l1), (f2, l2))]) :: rest
+        mkFrame (frame_lines fr2) (frame_subproofs fr2 ++ [SubProof f1 l1 f2 l2]) :: rest
       | _, _ => stk
       end
     | _ => stk
@@ -276,7 +284,7 @@ Definition scope (Σ : prededuct) : list (frml * id) :=
 (* The subproofs available to justify (e.g. via ImplI) the line that would
    come right after Σ: those closed directly in the current subproof or
    one of its ancestors. *)
-Definition sp_scope (Σ : prededuct) : list ((frml * id) * (frml * id)) :=
+Definition sp_scope (Σ : prededuct) : list subproof :=
   concat (map frame_subproofs (frame_stack Σ)).
 
 
@@ -297,7 +305,7 @@ Definition just_ok (pre : prededuct) (f : frml) (j : just) : Prop :=
     ∃ f1 f2, ((f1 ∧ f2)%F, l0) ∈ scope pre ∧
              f = (if flag then f1 else f2)
   | ImplI l1 l2 =>
-    ∃ f1 f2, ((f1, l1), (f2, l2)) ∈ sp_scope pre ∧
+    ∃ f1 f2, SubProof f1 l1 f2 l2 ∈ sp_scope pre ∧
                f = (f1 → f2)%F
   | ImplE l1 l2 =>
     ∃ f1 f2, ((f1 → f2)%F, l1) ∈ scope pre ∧

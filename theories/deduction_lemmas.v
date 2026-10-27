@@ -129,6 +129,37 @@ Proof.
   destruct l; simpl; rewrite ?IH; done.
 Qed.
 
+(* The ids of the top-level assumptions of Σ, cf. [assumptions_of] *)
+Fixpoint assumption_ids (Σ : prededuct) : list id :=
+  match Σ with
+  | [] => []
+  | Assume _ x :: Σ' => x :: assumption_ids Σ'
+  | _ :: Σ' => assumption_ids Σ'
+  end.
+
+(* Σ without its [Assume] lines *)
+Fixpoint drop_assumes (Σ : prededuct) : prededuct :=
+  match Σ with
+  | [] => []
+  | Assume _ _ :: Σ' => drop_assumes Σ'
+  | l :: Σ' => l :: drop_assumes Σ'
+  end.
+
+Lemma assumption_ids_app Σ1 Σ2 :
+  assumption_ids (Σ1 ++ Σ2) = assumption_ids Σ1 ++ assumption_ids Σ2.
+Proof. induction Σ1 as [|[] ? IH]; simpl; rewrite ?IH //. Qed.
+
+Lemma drop_assumes_app Σ1 Σ2 :
+  drop_assumes (Σ1 ++ Σ2) = drop_assumes Σ1 ++ drop_assumes Σ2.
+Proof. induction Σ1 as [|[] ? IH]; simpl; rewrite ?IH //. Qed.
+
+Lemma drop_assumes_sublist Σ :
+  lines_of_prededuct (drop_assumes Σ) `sublist_of` lines_of_prededuct Σ.
+Proof.
+  induction Σ as [|[] Σ IH]; simpl;
+    auto using sublist_nil_l, sublist_skip, sublist_cons.
+Qed.
+
 Lemma referenced_lines_app Θ1 Θ2 :
   referenced_lines (Θ1 ++ Θ2) = referenced_lines Θ1 ++ referenced_lines Θ2.
 Proof.
@@ -136,6 +167,10 @@ Proof.
   destruct l; simpl; rewrite ?IH; try done.
   rewrite app_assoc. done.
 Qed.
+
+Lemma referenced_lines_elem_of Θ s k :
+  s ∈ Θ -> k ∈ references_in_line s -> k ∈ referenced_lines Θ.
+Proof. induction Θ; set_solver. Qed.
 
 Lemma lines_of_prededuct_sublist Σ1 Σ2 :
   Σ1 `sublist_of` Σ2 ->
@@ -305,6 +340,73 @@ Proof.
   - assert (lines_of_prededuct (s :: Σ') = lines_of_prededuct Σ') as Hls
       by (destruct s; simpl in Hid; done).
     rewrite Hls in Hin. cbn [line_at]. rewrite Hid. by apply IH.
+Qed.
+
+Lemma frml_at_isSome Σ i :
+  i ∈ lines_of_prededuct Σ -> is_Some (frml_at Σ i).
+Proof.
+  rewrite /frml_at. induction Σ as [|[] Σ IH]; simpl;
+    rewrite ?elem_of_cons; intros Hi; [set_solver| | | |];
+    try case_decide; naive_solver.
+Qed.
+
+Lemma line_at_Some_inv Σ k s :
+  line_at Σ k = Some s -> s ∈ Σ ∧ id_of_line s = Some k.
+Proof.
+  induction Σ as [|s' Σ IH]; simpl; [done|].
+  destruct (id_of_line s') eqn:?; [case_decide|]; set_solver.
+Qed.
+
+(* With unique ids, [line_at] finds every line by its id. *)
+Lemma line_at_NoDup_elem_of Σ k s :
+  NoDup (lines_of_prededuct Σ) -> s ∈ Σ -> id_of_line s = Some k ->
+  line_at Σ k = Some s.
+Proof.
+  induction Σ as [|s' Σ IH]; intros Hnd Hs Hid; [set_solver|]. simpl.
+  apply elem_of_cons in Hs as [<- | Hs].
+  - by rewrite Hid decide_True.
+  - destruct (id_of_line s') as [j|] eqn:Hj.
+    + rewrite (lines_of_prededuct_cons_id _ _ _ Hj) in Hnd.
+      apply NoDup_cons in Hnd as [Hj' Hnd].
+      rewrite decide_False; [by apply IH|].
+      intros ->. apply Hj'. by eapply id_in_lines_of_prededuct.
+    + rewrite (lines_of_prededuct_cons_None _ _ Hj) in Hnd. by apply IH.
+Qed.
+
+(* A [Raise] and a [Deduce] cannot share an id. *)
+Lemma NoDup_raise_deduce Σ A B j k :
+  NoDup (lines_of_prededuct Σ) -> Raise A k ∈ Σ -> Deduce B j k ∈ Σ -> False.
+Proof.
+  intros Hnd H1 H2.
+  pose proof (line_at_NoDup_elem_of _ k _ Hnd H1 eq_refl).
+  pose proof (line_at_NoDup_elem_of _ k _ Hnd H2 eq_refl). congruence.
+Qed.
+
+Lemma line_at_app_mid X B Y k :
+  k ∉ lines_of_prededuct B -> line_at (X ++ B ++ Y) k = line_at (X ++ Y) k.
+Proof. intros Hk. by rewrite !line_at_app (line_at_not_in B). Qed.
+
+(** Permuting the lines of a prededuction *)
+
+Lemma lines_of_prededuct_omap Σ : lines_of_prededuct Σ = omap id_of_line Σ.
+Proof. induction Σ as [|[] Σ IH]; by f_equal/=. Qed.
+
+Lemma lines_of_prededuct_perm Σ Σ' :
+  Σ ≡ₚ Σ' -> lines_of_prededuct Σ ≡ₚ lines_of_prededuct Σ'.
+Proof. rewrite !lines_of_prededuct_omap. by intros ->. Qed.
+
+(* With unique ids, [line_at] does not see the order of the lines. *)
+Lemma line_at_perm Σ Σ' k :
+  Σ ≡ₚ Σ' -> NoDup (lines_of_prededuct Σ) -> line_at Σ k = line_at Σ' k.
+Proof.
+  intros Hp Hnd.
+  assert (Hnd' : NoDup (lines_of_prededuct Σ')) by by rewrite -(lines_of_prededuct_perm _ _ Hp).
+  destruct (line_at Σ k) as [s|] eqn:Hs.
+  - destruct (line_at_Some_inv _ _ _ Hs) as [Hin Hid].
+    symmetry. apply line_at_NoDup_elem_of; [done|by rewrite -Hp|done].
+  - destruct (line_at Σ' k) as [s|] eqn:Hs'; [|done].
+    destruct (line_at_Some_inv _ _ _ Hs') as [Hin Hid].
+    rewrite (line_at_NoDup_elem_of Σ k s) in Hs; [done|done|by rewrite Hp|done].
 Qed.
 
 (** Restriction properties *)
@@ -499,6 +601,19 @@ Proof.
   destruct (frml_at pre i1) as [f1|], (frml_at pre i2) as [f2|]; done.
 Qed.
 
+Lemma frame_stack_snoc_raise pre A l :
+  frame_stack (pre ++ [Raise A l]) = mkFrame [(A, l)] [] :: frame_stack pre.
+Proof. by rewrite frame_stack_snoc. Qed.
+
+Lemma frame_stack_snoc_deduce pre A j l :
+  ∃ fr rest, frame_stack pre = fr :: rest ∧
+    frame_stack (pre ++ [Deduce A j l]) =
+      mkFrame (frame_lines fr ++ [(A, l)]) (frame_subproofs fr) :: rest.
+Proof.
+  rewrite frame_stack_snoc.
+  destruct (frame_stack pre) eqn:E; [by destruct (frame_stack_nonempty pre)|]. by eexists _, _.
+Qed.
+
 
 Lemma frame_stack_all_inner_nonempty pre : all_inner_nonempty (frame_stack pre).
 Proof.
@@ -600,7 +715,7 @@ Qed.
 (** An [sp_scope] entry records the formulas at the lines it pairs (the
     [frml_at] strengthening of [sp_scope_id_in_lines]). *)
 Lemma sp_scope_frml_at pre f1 f2 i j :
-  ((f1, i), (f2, j)) ∈ sp_scope pre ->
+  SubProof f1 i f2 j ∈ sp_scope pre ->
   frml_at pre i = Some f1 /\ frml_at pre j = Some f2.
 Proof.
   revert f1 f2 i j.
@@ -612,11 +727,11 @@ Proof.
     intros Hin.
     assert (old_ids : forall q,
       q ∈ concat (map frame_subproofs (fr :: rest)) ->
-      match q with ((g1, i0), (g2, j0)) =>
+      match q with SubProof g1 i0 g2 j0 =>
         frml_at (pre ++ [l]) i0 = Some g1 /\
         frml_at (pre ++ [l]) j0 = Some g2
       end).
-    { intros [[g1 i0] [g2 j0]] Hq.
+    { intros [g1 i0 g2 j0] Hq.
       destruct (IH g1 g2 i0 j0 Hq) as [Hi Hj].
       split; by apply frml_at_app_l. }
     destruct l as [A k|A k|k1 k2|A js k]; simpl in Hin.
@@ -629,12 +744,12 @@ Proof.
         try exact (old_ids _ Hin).
         apply elem_of_app in Hin as [Hin|Hin].
         ** apply elem_of_app in Hin as [Hin|Hin].
-           *** refine (old_ids ((f1, i), (f2, j)) _).
+           *** refine (old_ids (SubProof f1 i f2 j) _).
                simpl. apply elem_of_app. right.
                apply elem_of_app. left. exact Hin.
            *** apply list_elem_of_singleton in Hin. injection Hin as -> -> -> ->.
                split; by apply frml_at_app_l.
-        ** refine (old_ids ((f1, i), (f2, j)) _).
+        ** refine (old_ids (SubProof f1 i f2 j) _).
            simpl. apply elem_of_app. right.
            apply elem_of_app. right. exact Hin.
     + exact (old_ids _ Hin).
@@ -842,11 +957,11 @@ Proof.
             constructor; [exact Hf2 | exact Hrest]. }
         1:{ (* upper = [u]: the raised frame is promoted, stays head l1 *)
             injection Heq as Hf1 Heq2.
-            left. exists [], (mkFrame (frame_lines f2) (frame_subproofs f2 ++ [(g1, a, (g2, b))])).
+            left. exists [], (mkFrame (frame_lines f2) (frame_subproofs f2 ++ [SubProof g1 a g2 b])).
             subst rest. split; [reflexivity|]. split; [constructor|].
             simpl. rewrite Heq2. exact HG'. }
         injection Heq as Hf1 Hf2 Hrest.
-        left. exists (mkFrame (frame_lines f2) (frame_subproofs f2 ++ [(g1, a, (g2, b))]) :: upper''), G'.
+        left. exists (mkFrame (frame_lines f2) (frame_subproofs f2 ++ [SubProof g1 a g2 b]) :: upper''), G'.
         subst rest. split; [reflexivity|]. split; [|exact HG'].
         apply Forall_cons in Hupper as [Hu Hupper2]. apply Forall_cons in Hupper2 as [Hu1 Hupper3].
         constructor; [|exact Hupper3]. simpl. rewrite Hf2. exact Hu1. }
@@ -862,7 +977,7 @@ Proof.
 Qed.
 
 Lemma sp_scope_id_in_lines pre f1 f2 i j :
-  ((f1, i), (f2, j)) ∈ sp_scope pre ->
+  SubProof f1 i f2 j ∈ sp_scope pre ->
   i ∈ lines_of_prededuct pre ∧ j ∈ lines_of_prededuct pre.
 Proof.
   intros Hin.
@@ -883,6 +998,18 @@ Proof.
   intros H. inversion H as [Hnil | line pre' Hpre Hline Heq].
   - by destruct pre.
   - apply app_inj_tail in Heq as [-> ->]. split; assumption.
+Qed.
+
+(* After the leading assumptions, there are no more assumptions *)
+Lemma drop_assumes_after pre s Σ :
+  lines_ok (pre ++ s :: Σ) -> ¬ is_assume s -> drop_assumes Σ = Σ.
+Proof.
+  intros Hok Hs. induction Σ as [|l Σ IH] using rev_ind; [done|].
+  rewrite app_comm_cons app_assoc in Hok.
+  apply lines_ok_snoc_inv in Hok as [Hok Hl].
+  rewrite drop_assumes_app IH //.
+  destruct l; simpl in *; try done.
+  exfalso. apply Hs. apply Forall_app in Hl as [_ Hl]. by inversion Hl.
 Qed.
 
 
@@ -936,6 +1063,19 @@ Proof.
     + apply app_inj_tail in Heq as [-> _].
       exact (IH _ Hpre).
 Qed.
+
+(* Legality of a single line inside a legal proof, does not depend on
+what comes *after* the line *)
+Lemma lines_ok_line_ok Σ Δ s rest :
+  lines_ok (Σ ++ Δ ++ s :: rest) -> line_ok (Σ ++ Δ) s.
+Proof.
+  intros H. rewrite app_assoc (cons_middle s) app_assoc in H.
+  by apply prefix_lines_ok, lines_ok_snoc_inv in H as [_ ?].
+Qed.
+
+Lemma lines_ok_line_ok_here Σ s rest :
+  lines_ok (Σ ++ s :: rest) -> line_ok Σ s.
+Proof. intros H. by apply (lines_ok_line_ok Σ [] s rest) in H; rewrite app_nil_r in H. Qed.
 
 (* Generic tail transfer for [lines_ok].  Every [*_lines_ok] induction lemma
    (removing a line, removing a subproof, swapping two [Deduce]s, moving a
@@ -993,6 +1133,21 @@ Lemma nodup_lines_app_prefix Σ Δ rest :
   NoDup (lines_of_prededuct (Σ ++ Δ)).
 Proof.
   rewrite app_assoc lines_of_prededuct_app. apply NoDup_app_remove_r.
+Qed.
+
+Lemma nodup_lines_prefix Σ rest :
+  NoDup (lines_of_prededuct (Σ ++ rest)) -> NoDup (lines_of_prededuct Σ).
+Proof. rewrite lines_of_prededuct_app. apply NoDup_app_remove_r. Qed.
+
+(* Whatever is visible from [X ++ Δ] is not in a block [B] that sits
+   between [X] and [Δ]. *)
+Lemma nodup_lines_mid_disjoint X B Δ rest k :
+  NoDup (lines_of_prededuct (X ++ B ++ Δ ++ rest)) ->
+  k ∈ lines_of_prededuct (X ++ Δ) -> k ∉ lines_of_prededuct B.
+Proof.
+  rewrite !lines_of_prededuct_app. intros Hnd Hk HkB.
+  apply NoDup_app in Hnd as (_ & H1 & Hnd). apply NoDup_app in Hnd as (_ & H2 & _).
+  apply elem_of_app in Hk as [Hk|Hk]; [apply (H1 k Hk)|apply (H2 k HkB)]; set_solver.
 Qed.
 
 Lemma nodup_mid_proof_line Θ1 s Θ3 :
@@ -1097,7 +1252,7 @@ Qed.
     analysis that otherwise recurs at every scope-manipulation site. *)
 Lemma just_ok_transfer pre pre' f j :
   (forall g k, k ∈ references_in_just j -> (g, k) ∈ scope pre -> (g, k) ∈ scope pre') ->
-  (forall q, q.1.2 ∈ references_in_just j -> q ∈ sp_scope pre -> q ∈ sp_scope pre') ->
+  (forall q, sp_start q ∈ references_in_just j -> q ∈ sp_scope pre -> q ∈ sp_scope pre') ->
   just_ok pre f j -> just_ok pre' f j.
 Proof.
   intros Hsc Hsp Hj.
@@ -1112,7 +1267,7 @@ Proof.
     split; [apply (Hsc (fConj f1 f2) l0); [apply elem_of_cons; by left | exact H1]
            | reflexivity].
   - destruct Hj as (f1 & f2 & H1 & ->). exists f1, f2.
-    split; [apply (Hsp ((f1, m1), (f2, m2))); [apply elem_of_cons; by left | exact H1]
+    split; [apply (Hsp (SubProof f1 m1 f2 m2)); [apply elem_of_cons; by left | exact H1]
            | reflexivity].
   - destruct Hj as (f1 & f2 & H1 & H2 & ->). exists f1, f2.
     split; [apply (Hsc (fImpl f1 f2) m1); [apply elem_of_cons; by left | exact H1]|].
@@ -1145,6 +1300,10 @@ Proof.
   unfold conclusion_of. by rewrite app_assoc !last_snoc.
 Qed.
 
+Lemma conclusion_of_mid X Y Θ :
+  Θ ≠ [] -> conclusion_of (X ++ Θ) = conclusion_of (Y ++ Θ).
+Proof. intros. by rewrite !conclusion_of_app. Qed.
+
 Lemma conclusion_of_snoc_inv pre s f :
   conclusion_of (pre ++ [s]) = Some f ->
   conclusion_of [s] = Some f.
@@ -1157,3 +1316,162 @@ Lemma conclusion_of_snoc_deduce pre f j i :
   conclusion_of (pre ++ [Deduce f j i]) = Some f.
 Proof. by rewrite conclusion_of_app. Qed.
 
+
+
+(** ** Closing subproofs *)
+
+(* A [Deduce] line puts its id at the end of the top frame. *)
+Lemma frame_stack_last_deduce pre f j k :
+  last pre = Some (Deduce f j k) ->
+  ∃ fr rest, frame_stack pre = fr :: rest ∧ last (frame_lines fr) = Some (f, k).
+Proof.
+  intros [pre' ->]%last_Some.
+  rewrite frame_stack_snoc /=.
+  destruct (frame_stack pre') as [|fr rest] eqn:E; [by destruct (frame_stack_nonempty pre')|].
+  eexists _, _. split; [done|]. by rewrite /= last_snoc.
+Qed.
+
+(* The lines named by a legal [ScopeClose] are in scope. *)
+Lemma scopeclose_ids_in_scope pre k1 k2 :
+  line_ok pre (ScopeClose k1 k2) ->
+  (∃ f, (f, k1) ∈ scope pre) ∧ (∃ f, (f, k2) ∈ scope pre).
+Proof.
+  intros [_ Hstk]. rewrite /scope.
+  destruct (frame_stack pre) as [|fr [|fr' rest]]; try done.
+  destruct Hstk as [Hh Hl].
+  destruct (head (frame_lines fr)) as [[f i]|] eqn:Eh; simplify_eq/=.
+  destruct (last (frame_lines fr)) as [[g i']|] eqn:El; simplify_eq/=.
+  split; [exists f|exists g]; apply elem_of_app; left;
+    [by apply head_Some_elem_of|by apply last_Some_elem_of].
+Qed.
+
+(* Thanks to the rule "a [ScopeClose] comes right after a [Deduce] of its
+   last line", the [last] condition of a close is automatic; only the
+   [head] condition needs to be transferred. *)
+Lemma scopeclose_ok_transfer preW preO k1 k2 :
+  line_ok preW (ScopeClose k1 k2) ->
+  last preO = last preW ->
+  length (frame_stack preO) = length (frame_stack preW) ->
+  (forall fO, head (frame_stack preO) = Some fO ->
+     option_map snd (head (frame_lines fO)) = Some k1) ->
+  line_ok preO (ScopeClose k1 k2).
+Proof.
+  rewrite /line_ok. intros [Hlast Hstk] HlastO Hlen Hhead.
+  rewrite HlastO. split; [done|].
+  destruct (last preW) as [[| | |f j k]|] eqn:EW; try done. subst k.
+  destruct (frame_stack_last_deduce preO f j k2) as (fr & rest & Efr & Hl);
+    [by rewrite HlastO|].
+  rewrite Efr in Hlen Hhead |- *.
+  destruct (frame_stack preW) as [|? [|? ?]]; try done.
+  destruct rest as [|? ?]; [simpl in Hlen; lia|].
+  split; [by apply Hhead|]. by rewrite Hl.
+Qed.
+
+(** Every frame of the stack except the bottom one was pushed by a
+    [Raise], so its first line is that [Raise]. *)
+Fixpoint inner_raised (pre : prededuct) (stk : list frame) : Prop :=
+  match stk with
+  | [] => True
+  | [_] => True
+  | fr :: rest =>
+    (∃ A i, head (frame_lines fr) = Some (A, i) ∧ Raise A i ∈ pre) ∧
+    inner_raised pre rest
+  end.
+
+Lemma inner_raised_mono pre pre' stk :
+  (forall x, x ∈ pre -> x ∈ pre') -> inner_raised pre stk -> inner_raised pre' stk.
+Proof.
+  intros Hsub. induction stk as [|fr [|fr' rest] IH]; [done|done|].
+  intros [(A & i & Hh & Hin) Hrest]. split; [by eauto|by apply IH].
+Qed.
+
+Lemma inner_raised_step pre stk s :
+  inner_raised pre stk -> inner_raised (pre ++ [s]) (frame_step pre stk s).
+Proof.
+  intros H. apply (inner_raised_mono pre (pre ++ [s])) in H; [|set_solver].
+  destruct s as [f l|f l|l1 l2|f j l]; simpl.
+  - destruct stk as [|fr [|fr' rest]]; [done|done|].
+    destruct H as [(A & i & Hh & Hin) Hrest]. split; [|done].
+    exists A, i. by rewrite /= head_app Hh.
+  - destruct stk as [|fr rest]; [done|].
+    split; [|done]. eexists _, _. split; [done|set_solver].
+  - destruct stk as [|a [|fr2 rest]]; try done.
+    destruct (frml_at pre l1), (frml_at pre l2); try done.
+    destruct rest as [|fr3 rest]; [done|].
+    by destruct H as [_ [Hfr2 Hrest]].
+  - destruct stk as [|fr [|fr' rest]]; [done|done|].
+    destruct H as [(A & i & Hh & Hin) Hrest]. split; [|done].
+    exists A, i. by rewrite /= head_app Hh.
+Qed.
+
+Lemma inner_raised_go pre stk Δ :
+  inner_raised pre stk -> inner_raised (pre ++ Δ) (frame_stack_go pre stk Δ).
+Proof.
+  revert pre stk. induction Δ as [|s Δ IH]; intros pre stk H; simpl.
+  - by rewrite app_nil_r.
+  - rewrite (cons_middle s pre Δ) app_assoc. apply IH. by apply inner_raised_step.
+Qed.
+
+(* The top frame of a stack with an open subproof starts with a [Raise]
+   line; with unique ids, it does not start with a [Deduce] line. *)
+Lemma frame_stack_top_not_deduce pre fr fr' rest B j k :
+  NoDup (lines_of_prededuct pre) ->
+  frame_stack pre = fr :: fr' :: rest ->
+  Deduce B j k ∈ pre ->
+  option_map snd (head (frame_lines fr)) ≠ Some k.
+Proof.
+  intros Hnd E HD.
+  pose proof (inner_raised_go [] [mkFrame [] []] pre I) as H.
+  rewrite /frame_stack in E. rewrite E /= in H.
+  destruct H as [(A & i & Hh & Hin) _].
+  rewrite Hh /=. intros [= ->]. by eapply NoDup_raise_deduce.
+Qed.
+
+(* The line before a legal close is the last line of the subproof's body. *)
+Lemma closed_block_last_line P A l1 Θ2 l2 :
+  lines_ok (P ++ Raise A l1 :: Θ2 ++ [ScopeClose l1 l2]) ->
+  ∃ f j, last Θ2 = Some (Deduce f j l2).
+Proof.
+  rewrite app_comm_cons app_assoc. intros [_ [Hlast _]]%lines_ok_snoc_inv.
+  rewrite last_app_cons last_cons in Hlast.
+  destruct (last Θ2) as [[| | |f j k]|]; try done. subst. by eexists _, _.
+Qed.
+
+(* A legal closed subproof [Raise A l1 … ScopeClose l1 l2] leaves the frame
+   stack as it found it, except that the current frame records the
+   subproof. *)
+Lemma frame_stack_closed_block P A l1 Θ2 l2 :
+  lines_ok (P ++ Raise A l1 :: Θ2 ++ [ScopeClose l1 l2]) ->
+  NoDup (lines_of_prededuct (P ++ Raise A l1 :: Θ2 ++ [ScopeClose l1 l2])) ->
+  ∃ fr rest f2 j,
+    frame_stack P = fr :: rest ∧
+    last Θ2 = Some (Deduce f2 j l2) ∧
+    frame_stack (P ++ Raise A l1 :: Θ2 ++ [ScopeClose l1 l2]) =
+      mkFrame (frame_lines fr) (frame_subproofs fr ++ [SubProof A l1 f2 l2]) :: rest.
+Proof.
+  intros Hok Hnd.
+  destruct (closed_block_last_line _ _ _ _ _ Hok) as (f2 & j & EL).
+  apply (nodup_lines_app_prefix _ (Raise A l1 :: Θ2)) in Hnd.
+  rewrite app_comm_cons app_assoc in Hok |- *.
+  apply lines_ok_snoc_inv in Hok as [_ [_ Hstk]].
+  pose proof Hnd as Hnd'.
+  rewrite lines_of_prededuct_app /= in Hnd'.
+  apply NoDup_app in Hnd' as (_ & Hdisj & Hnd2). apply NoDup_cons in Hnd2 as [Hl1Θ2 _].
+  assert (Hl1P : l1 ∉ lines_of_prededuct P).
+  { intros H. apply (Hdisj l1 H). set_solver. }
+  assert (Hf1 : frml_at (P ++ Raise A l1 :: Θ2) l1 = Some A).
+  { rewrite /frml_at (line_at_NoDup_elem_of _ l1 (Raise A l1)) //. set_solver. }
+  assert (Hf2 : frml_at (P ++ Raise A l1 :: Θ2) l2 = Some f2).
+  { rewrite /frml_at (line_at_NoDup_elem_of _ l2 (Deduce f2 j l2)) //.
+    apply last_Some_elem_of in EL. set_solver. }
+  rewrite frame_stack_snoc.
+  destruct (block_invariant P A l1 Θ2 Hl1P Hl1Θ2)
+    as [([|u upper] & G' & Estk & Hup & HG)|Hno].
+  - rewrite Estk /=.
+    destruct (frame_stack P) as [|fr rest] eqn:EP; [by destruct (frame_stack_nonempty P)|].
+    exists fr, rest, f2, j. by rewrite /= Hf1 Hf2.
+  - rewrite Estk in Hstk. apply Forall_cons in Hup as [Hu _].
+    destruct upper; simpl in Hstk; destruct Hstk; contradiction.
+  - destruct (frame_stack (P ++ Raise A l1 :: Θ2)) as [|fr [|? ?]]; try done.
+    apply Forall_cons in Hno as [Hno _]. by destruct Hstk.
+Qed.

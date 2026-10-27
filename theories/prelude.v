@@ -167,6 +167,12 @@ Proof.
   eapply elem_of_sublist in H1; eauto.
 Qed.
 
+Lemma list_elem_of_concat {A} (x : A) (ls : list (list A)) :
+  x ∈ concat ls ↔ ∃ l, x ∈ l ∧ l ∈ ls.
+Proof.
+  rewrite list_elem_of_In in_concat. setoid_rewrite list_elem_of_In. naive_solver.
+Qed.
+
 
 
 Lemma perm_app_interleave {A} (a b c d e : list A) :
@@ -179,6 +185,66 @@ Proof.
   done.
 Qed.
 
+
+Lemma last_app_ne {A} (X Y Δ : list A) :
+  Δ ≠ [] → last (X ++ Δ) = last (Y ++ Δ).
+Proof. rewrite !last_app -last_is_Some. by intros [? ->]. Qed.
+
+(** ** Local edits of lists *)
+
+(* [list_del P L L']: [L'] is [L] with one element satisfying [P] removed. *)
+Definition list_del {A} (P : A → Prop) (L L' : list A) : Prop :=
+  ∃ L1 x L2, P x ∧ L = L1 ++ x :: L2 ∧ L' = L1 ++ L2.
+
+(* [list_swap P L L']: [L'] is [L] with two adjacent elements transposed,
+   the first of which satisfies [P]. *)
+Definition list_swap {A} (P : A → Prop) (L L' : list A) : Prop :=
+  ∃ L1 x y L2, P x ∧ L = L1 ++ x :: y :: L2 ∧ L' = L1 ++ y :: x :: L2.
+
+(* Both edits can only change the head if the edited element was the head. *)
+Lemma list_del_head {A} (P : A → Prop) L L' :
+  list_del P L L' → head L' = head L ∨ ∃ x, P x ∧ head L = Some x.
+Proof. intros (L1 & x & L2 & Hx & -> & ->). destruct L1; naive_solver. Qed.
+
+Lemma list_swap_head {A} (P : A → Prop) L L' :
+  list_swap P L L' → head L' = head L ∨ ∃ x, P x ∧ head L = Some x.
+Proof. intros (L1 & x & y & L2 & Hx & -> & ->). destruct L1; naive_solver. Qed.
+
+(* [list_edit R Keep]: the relation [R] is stable under appending the same
+   element on both sides, and it keeps every element satisfying [Keep]. *)
+Record list_edit {A} (R : relation (list A)) (Keep : A → Prop) : Prop := {
+  list_edit_snoc L L' x : R L L' → R (L ++ [x]) (L' ++ [x]);
+  list_edit_elem_of L L' x : R L L' → x ∈ L → Keep x → x ∈ L';
+}.
+
+Lemma list_edit_eq {A} (Keep : A → Prop) : list_edit (=) Keep.
+Proof. split; naive_solver. Qed.
+
+Lemma list_edit_eq_flip {A} (Keep : A → Prop) : list_edit (flip (=)) Keep.
+Proof. split; rewrite /flip; naive_solver. Qed.
+
+Lemma list_edit_del {A} (P : A → Prop) : list_edit (list_del P) (λ x, ¬ P x).
+Proof.
+  split.
+  - intros L L' z (L1 & x & L2 & Hx & -> & ->).
+    exists L1, x, (L2 ++ [z]). by rewrite -!app_assoc.
+  - intros L L' z (L1 & x & L2 & Hx & -> & ->). set_solver.
+Qed.
+
+Lemma list_edit_ins {A} (P Keep : A → Prop) : list_edit (flip (list_del P)) Keep.
+Proof.
+  split; rewrite /flip.
+  - intros L L' z ?. by apply (list_edit_snoc _ _ (list_edit_del P)).
+  - intros L L' z (L1 & x & L2 & Hx & -> & ->). set_solver.
+Qed.
+
+Lemma list_edit_swap {A} (P Keep : A → Prop) : list_edit (list_swap P) Keep.
+Proof.
+  split.
+  - intros L L' z (L1 & x & y & L2 & Hx & -> & ->).
+    exists L1, x, y, (L2 ++ [z]). by rewrite -!app_assoc.
+  - intros L L' z (L1 & x & y & L2 & Hx & -> & ->). set_solver.
+Qed.
 
 (** ** Lifting step-level facts along [rtc] *)
 
