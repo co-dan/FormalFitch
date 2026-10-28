@@ -4,10 +4,13 @@
 # Prelude: useful background lemmas that are of general shape and interest
 theories/prelude.v
 
-# Core: definitions of proofs, terms, reductions, and translations
+# Core: definitions of proofs, terms, and proof reductions
 theories/core/deduct.v
 theories/core/reductions.v
+theories/core/letsub.v
 theories/core.v
 
+# Auxiliary lemmas about deductions and proof reductions
 theories/deduction_lemmas.v
 theories/reduction_lemmas.v
+

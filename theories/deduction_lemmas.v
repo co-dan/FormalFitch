@@ -1316,6 +1316,12 @@ Lemma conclusion_of_snoc_deduce pre f j i :
   conclusion_of (pre ++ [Deduce f j i]) = Some f.
 Proof. by rewrite conclusion_of_app. Qed.
 
+Lemma conclusion_of_cons s Σ :
+  is_Some (conclusion_of Σ) -> conclusion_of (s :: Σ) = conclusion_of Σ.
+Proof.
+  intros HΣ. apply (conclusion_of_app [s]). intros ->. by destruct HΣ.
+Qed.
+
 
 
 (** ** Closing subproofs *)
