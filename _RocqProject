@@ -8,9 +8,10 @@ theories/prelude.v
 theories/core/deduct.v
 theories/core/reductions.v
 theories/core/letsub.v
+theories/core/translations.v
 theories/core.v
 
 # Auxiliary lemmas about deductions and proof reductions
 theories/deduction_lemmas.v
 theories/reduction_lemmas.v
-
+theories/translations_lemmas.v

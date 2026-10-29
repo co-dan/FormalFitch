@@ -273,3 +273,31 @@ where "Γ ⊢ₚ p : A" := (prog_typed Γ p A).
 (** A closed, well-typed program with conclusion [C] *)
 Definition prog_ok (p : prog) (C : frml) : Prop :=
   names_unique p /\ [] ⊢ₚ p : C.
+
+(** * Evaluation contexts *)
+
+(** A context item is one layer of a body around a hole. The hole can
+    be after a [LET] ([CLet]), inside a subroutine ([CSubBody]), or in
+    the continuation after a subroutine ([CSubCont]). *)
+Inductive ectx_item :=
+| CLet (x : nat) (A : frml) (o : op)
+| CSubBody (x y : nat) (A B : frml) (k : body)
+| CSubCont (x y : nat) (A B : frml) (s : subr)
+.
+
+(** Contexts are lists of items, outermost first; the empty list is
+    the hole *)
+Definition ectx := list ectx_item.
+
+Definition fill_item (Ei : ectx_item) (b : body) : body :=
+  match Ei with
+  | CLet x A o => BLet x A o b
+  | CSubBody x y A B k => BLetSub x y A B (mkSubr x b) k
+  | CSubCont x y A B s => BLetSub x y A B s b
+  end.
+
+Definition fill (E : ectx) (b : body) : body := foldr fill_item b E.
+
+Lemma fill_cons Ei E b : fill (Ei :: E) b = fill_item Ei (fill E b).
+Proof. done. Qed.
+
