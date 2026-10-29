@@ -15,3 +15,6 @@ theories/core.v
 theories/deduction_lemmas.v
 theories/reduction_lemmas.v
 theories/translations_lemmas.v
+
+theories/examples.v
+
