@@ -15,6 +15,14 @@ theories/core.v
 theories/deduction_lemmas.v
 theories/reduction_lemmas.v
 theories/translations_lemmas.v
+theories/typing_lemmas.v
 
 theories/examples.v
+
+# Reductions
+theories/reductions/stackedit.v
+theories/reductions/validity.v
+theories/reductions/letsub_reductions.v
+theories/reductions/letsub_garb.v
+theories/reductions/letsub_indep.v
 

@@ -1,6 +1,7 @@
 (* Translations between Fitch (pre)deductions and LetLang programs *)
 From stdpp Require Import list.
-From fitch Require Import prelude core deduction_lemmas.
+From fitch Require Import prelude core
+  deduction_lemmas typing_lemmas.
 
 (** * Typing preservation *)
 
@@ -365,6 +366,19 @@ Proof.
   induction Σ as [|[A x| | |] Σ IH]; simpl; try done; apply body_of_deduct_wf.
 Qed.
 
+(** Well-typed programs are well-formed *)
+Lemma body_typed_wf Γ b C : Γ ⊢ b : C -> body_wf b.
+Proof.
+  induction 1 as [Γ x A o k C Ho _ IH|Γ x y A B b k C Hb IHb _ IHk|Γ A o Ho];
+    simpl; rewrite /op_wf.
+  - split; [|done]. by eapply op_of_just_of_op.
+  - split_and!; [|done|done]. symmetry. by eapply body_typed_ret_ty.
+  - by eapply op_of_just_of_op.
+Qed.
+
+Lemma prog_typed_wf Γ p C : Γ ⊢ₚ p : C -> prog_wf p.
+Proof. induction 1; simpl; [done|]. by eapply body_typed_wf. Qed.
+
 (** ** Typing *)
 
 Lemma deduct_of_body_nonempty y b : ⦇b⦈ y ≠ [].
@@ -558,4 +572,461 @@ Proof.
   pose proof (deduct_of_term_conclusion _ _ _ Hty) as HC'.
   rewrite Hrt HC in HC'. injection HC' as ->.
   split; [|done]. rewrite /names_unique -lines_of_deduct_of_term. by rewrite Hrt.
+Qed.
+
+(** * Translations on the level of contexts *)
+
+(** The translation of a context: the lines before and after the hole,
+    and the id of the return of the (sub)proof that contains the hole *)
+Definition item_ret (y : id) (Ei : ectx_item) : id :=
+  match Ei with
+  | CSubBody _ y' _ _ _ => y'
+  | _ => y
+  end.
+
+Definition item_pre (Ei : ectx_item) : prededuct :=
+  match Ei with
+  | CLet x A o => [Deduce A (just_of_op o) x]
+  | CSubBody x _ A _ _ => [Raise A x]
+  | CSubCont x y A _ s => deduct_of_sub x y A s
+  end.
+
+Definition item_post (y : id) (Ei : ectx_item) : prededuct :=
+  match Ei with
+  | CSubBody x y' _ _ k => ScopeClose x y' :: ⦇k⦈ y
+  | _ => []
+  end.
+
+Definition ectx_ret (y : id) (E : ectx) : id := foldl item_ret y E.
+
+Definition ectx_pre (E : ectx) : prededuct := E ≫= item_pre.
+
+Fixpoint ectx_post (y : id) (E : ectx) : prededuct :=
+  match E with
+  | [] => []
+  | Ei :: E => ectx_post (item_ret y Ei) E ++ item_post y Ei
+  end.
+
+Lemma deduct_of_body_fill_item y Ei b :
+  ⦇fill_item Ei b⦈ y =
+  item_pre Ei ++ ⦇b⦈ (item_ret y Ei) ++ item_post y Ei.
+Proof. destruct Ei; simpl; by rewrite ?app_nil_r -?app_assoc. Qed.
+
+Lemma deduct_of_body_fill y E b :
+  ⦇fill E b⦈ y =
+  ectx_pre E ++ ⦇b⦈ (ectx_ret y E) ++ ectx_post y E.
+Proof.
+  revert y. induction E as [|Ei E IH]; intros y; [by rewrite /= app_nil_r|].
+  rewrite fill_cons deduct_of_body_fill_item IH /ectx_pre bind_cons /=.
+  by rewrite -!app_assoc.
+Qed.
+
+Lemma deduct_of_let z x A o k :
+  ⦇BLet x A o k⦈ z = Deduce A (just_of_op o) x :: ⦇k⦈ z.
+Proof. done. Qed.
+
+Lemma deduct_of_letsub z x y A B s k :
+  ⦇BLetSub x y A B (mkSubr x s) k⦈ z =
+  [Raise A x] ++ ⦇s⦈ y ++ [ScopeClose x y] ++ ⦇k⦈ z.
+Proof. simpl. by rewrite -app_assoc. Qed.
+
+Lemma not_closing_deduct_of_body y b : not_closing (⦇b⦈ y).
+Proof. destruct b as [|???? [] ?|]; by eexists. Qed.
+
+(** * Translation and references *)
+
+Lemma op_vars_refs o l :
+  l ∈ references_in_just (just_of_op o) -> ∃ v, v ∈ op_vars o ∧ l ∈ var_ids v.
+Proof.
+  intros Hl. cut (l ∈ op_vars o ≫= var_ids).
+  { rewrite list_elem_of_bind. naive_solver. }
+  revert Hl.
+  destruct o; repeat match goal with v : var |- _ => destruct v end;
+    simpl; set_solver.
+Qed.
+
+Lemma op_vars_refs_rev o v :
+  v ∈ op_vars o -> var_id v ∈ references_in_just (just_of_op o).
+Proof.
+  destruct o; repeat match goal with w : var |- _ => destruct w end;
+    simpl; set_solver.
+Qed.
+
+Lemma op_refs_not_in Γ o A l :
+  Γ ⊢ₒ o : A ->
+  (∀ v T, v ∈ op_vars o -> (v, T) ∈ Γ -> l ∈ var_ids v -> False) ->
+  l ∉ references_in_just (just_of_op o).
+Proof.
+  intros Ho Hl (v & Hv & Hlv)%op_vars_refs.
+  destruct (op_vars_typed _ _ _ _ Ho Hv) as [T HT]. eauto.
+Qed.
+
+(** The lines referenced by the translation of a well-typed body are
+    those of its free variables, or its own binders *)
+Lemma deduct_of_body_refs Γ b C :
+  Γ ⊢ b : C -> ∀ y l, l ∈ referenced_lines (⦇b⦈ y) ->
+  (∃ v, v ∈ body_fv b ∧ l ∈ var_ids v) ∨ l ∈ body_binders b.
+Proof.
+  induction 1 as [Γ x A o k C _ _ IH|Γ x y' A B b k C _ IHb _ IHk|Γ A o _];
+    intros y l; simpl; rewrite ?referenced_lines_app /= ?elem_of_app.
+  - intros [(v & ? & ?)%op_vars_refs|Hl]; [left; set_solver|].
+    destruct (IH _ _ Hl) as [(v & ? & ?)|?]; [|set_solver].
+    destruct (decide (v = LVar x)) as [->|]; [set_solver|].
+    left. exists v. rewrite elem_of_app list_elem_of_filter. naive_solver.
+  - intros [[Hl|Hl]|Hl].
+    + destruct (IHb _ _ Hl) as [(v & ? & ?)|?]; [|set_solver].
+      destruct (decide (v = LVar x)) as [->|]; [set_solver|].
+      left. exists v. rewrite elem_of_app !list_elem_of_filter. naive_solver.
+    + set_solver.
+    + destruct (IHk _ _ Hl) as [(v & ? & ?)|?]; [|set_solver].
+      destruct (decide (v = SVar x y')) as [->|]; [set_solver|].
+      left. exists v. rewrite elem_of_app !list_elem_of_filter. naive_solver.
+  - intros [(v & ? & ?)%op_vars_refs|?]; [left; eauto|set_solver].
+Qed.
+
+Lemma deduct_of_body_refs_ctx Γ b C y l :
+  Γ ⊢ b : C -> l ∈ referenced_lines (⦇b⦈ y) ->
+  (∃ v T, v ∈ body_fv b ∧ (v, T) ∈ Γ ∧ l ∈ var_ids v) ∨
+  l ∈ body_binders b.
+Proof.
+  intros Hb Hl. destruct (deduct_of_body_refs _ _ _ Hb _ _ Hl) as [(v & ? & ?)|?];
+    [left|by right].
+  destruct (body_fv_typed _ _ _ _ Hb ltac:(done)) as [T ?]. eauto.
+Qed.
+
+(** The lines referenced after the hole *)
+Lemma item_post_refs Γ Ei b C y l :
+  body_typed Γ (fill_item Ei b) C -> l ∈ referenced_lines (item_post y Ei) ->
+  l ∈ ctx_ids Γ ∨ l ∈ item_pre_binders Ei ∨ l ∈ item_post_binders Ei.
+Proof.
+  destruct Ei as [|x y' A B k|]; simpl; [set_solver| |set_solver].
+  inversion 1; subst. rewrite !elem_of_cons. intros [->|[->|Hl]]; [set_solver..|].
+  destruct (deduct_of_body_refs_ctx _ _ _ _ _ ltac:(eassumption) Hl)
+    as [(v & T & _ & HvT & Hlv)|]; [|set_solver].
+  apply elem_of_cons in HvT as [[= -> ->]|HvT]; [set_solver|].
+  left. apply elem_of_ctx_ids. eauto.
+Qed.
+
+Lemma ectx_post_refs Γ E b C y l :
+  body_typed Γ (fill E b) C -> l ∈ referenced_lines (ectx_post y E) ->
+  l ∈ ctx_ids Γ ∨ l ∈ ectx_pre_binders E ∨ l ∈ ectx_post_binders E.
+Proof.
+  revert Γ C y. induction E as [|Ei E IH]; intros Γ C y Hb; [set_solver|].
+  destruct (fill_item_typed _ _ _ _ Hb) as (Γ' & C' & Hb' & Hids' & _).
+  cbn [ectx_post]. rewrite referenced_lines_app elem_of_app.
+  rewrite ectx_pre_binders_cons ectx_post_binders_cons !elem_of_app.
+  intros [Hl|Hl].
+  - destruct (IH _ _ _ Hb' Hl) as [[|]%Hids'|]; set_solver.
+  - destruct (item_post_refs _ _ _ _ _ _ Hb Hl); set_solver.
+Qed.
+
+Lemma body_refs_not_in Γ b C y l :
+  Γ ⊢ b : C ->
+  (∀ v T, v ∈ body_fv b -> (v, T) ∈ Γ -> l ∈ var_ids v -> False) ->
+  l ∉ body_binders b ->
+  l ∉ referenced_lines (⦇b⦈ y).
+Proof.
+  intros Hb Hl Hbind Hr.
+  by destruct (deduct_of_body_refs_ctx _ _ _ _ _ Hb Hr)
+    as [(v & T & ? & ? & ?)|]; eauto.
+Qed.
+
+(** Free variables are referenced in the translation *)
+Lemma body_fv_refs Γ b C :
+  Γ ⊢ b : C -> ∀ y v, v ∈ body_fv b ->
+  var_id v ∈ referenced_lines (⦇b⦈ y).
+Proof.
+  induction 1 as [Γ x A o k C _ _ IH|Γ x y' A B b k C _ IHb _ IHk|Γ A o _];
+    intros y v; simpl; rewrite ?elem_of_app ?list_elem_of_filter.
+  - intros [Hv|[_ Hv]]; [left; by apply op_vars_refs_rev|right; by apply IH].
+  - rewrite !referenced_lines_app /=.
+    intros [[_ Hv]|[_ Hv]]; [apply (IHb y') in Hv|apply (IHk y) in Hv]; set_solver.
+  - intros Hv%op_vars_refs_rev. set_solver.
+Qed.
+
+(** The subproofs closed in a translation are named by binders *)
+Lemma body_scs_binders Γ b C :
+  Γ ⊢ b : C -> ∀ y a c,
+  ScopeClose a c ∈ ⦇b⦈ y -> a ∈ body_binders b.
+Proof.
+  induction 1 as [Γ x A o k C _ _ IH|Γ x y' A B b k C _ IHb _ IHk|Γ A o _];
+    intros y a c; simpl.
+  - intros [[=]|Hin]%elem_of_cons. right. by eapply IH.
+  - intros [[=]|Hin]%elem_of_cons. rewrite !elem_of_app in Hin.
+    destruct Hin as [[Hin|[[= -> _]|[]%not_elem_of_nil]%elem_of_cons]|Hin].
+    + apply IHb in Hin. set_solver.
+    + set_solver.
+    + apply IHk in Hin. set_solver.
+  - by intros [[=]|[]%not_elem_of_nil]%elem_of_cons.
+Qed.
+
+(** * Splitting translations *)
+
+(** A split of a translation before a line with an id is either after
+    the translation, or at the start of a sub-body *)
+Lemma deduct_of_body_split Γ b C :
+  Γ ⊢ b : C -> ∀ y R Θ1 s Θ',
+  ⦇b⦈ y ++ R = Θ1 ++ s :: Θ' -> is_Some (id_of_line s) ->
+  (∃ Θ1', Θ1 = ⦇b⦈ y ++ Θ1' ∧ R = Θ1' ++ s :: Θ') ∨
+  (∃ E b0, b = fill E b0 ∧ Θ1 = ectx_pre E ∧
+           s :: Θ' = ⦇b0⦈ (ectx_ret y E) ++ ectx_post y E ++ R).
+Proof.
+  induction 1 as [Γ x B o k C Ho Hk IH|Γ x y' B C' b0 k C Hb0 IHb Hk IHk|Γ B o Ho];
+    intros y R Θ1 s Θ' Heq Hs; simpl in Heq.
+  - (* LET *)
+    destruct Θ1 as [|s' Θ1]; simpl in Heq.
+    + right. exists [], <{ LET x : B = o IN k }>. split_and!; [done|done|].
+      simpl. congruence.
+    + injection Heq as <- Heq.
+      destruct (IH y R Θ1 s Θ' Heq Hs)
+        as [(Θ1' & -> & ->)|(E & b0 & -> & -> & HE)].
+      * left. by exists Θ1'.
+      * right. exists (CLet x B o :: E), b0. split_and!; [done|done|].
+        rewrite HE. cbn [ectx_post item_post item_ret]. by rewrite app_nil_r.
+  - (* LET SUB *)
+    rewrite -!app_assoc /= in Heq.
+    destruct Θ1 as [|s' Θ1]; simpl in Heq.
+    + right. exists [], (BLetSub x y' B C' (mkSubr x b0) k).
+      split_and!; [done|done|]. rewrite /= -!app_assoc /=. congruence.
+    + injection Heq as <- Heq.
+      destruct (IHb y' (ScopeClose x y' :: ⦇k⦈ y ++ R) Θ1 s Θ' Heq Hs)
+        as [(Θ1' & -> & HR)|(E & b1 & -> & -> & HE)].
+      * destruct Θ1' as [|s'' Θ1']; simpl in HR.
+        { injection HR as <- _. by destruct Hs. }
+        injection HR as <- HR.
+        destruct (IHk y R Θ1' s Θ' HR Hs)
+          as [(Θ1'' & -> & ->)|(E & b1 & -> & -> & HE)].
+        -- left. exists Θ1''. by rewrite /= -!app_assoc.
+        -- right. exists (CSubCont x y' B C' (mkSubr x b0) :: E), b1.
+           split_and!; [done|by rewrite /ectx_pre bind_cons /= -!app_assoc|].
+           rewrite HE. cbn [ectx_post item_post item_ret]. by rewrite app_nil_r.
+      * right. exists (CSubBody x y' B C' k :: E), b1.
+        split_and!; [done|by rewrite /ectx_pre bind_cons|].
+        rewrite HE. cbn [ectx_post item_post item_ret]. by rewrite -!app_assoc.
+  - (* RETURN *)
+    destruct Θ1 as [|s' Θ1]; simpl in Heq.
+    + right. exists [], (BRet B o). split_and!; [done|done|].
+      simpl. congruence.
+    + injection Heq as <- Heq. left. by exists Θ1.
+Qed.
+
+(** What follows a hole is empty or starts by closing a subproof *)
+Lemma ectx_post_not_closing y E R :
+  ¬ not_closing R -> ¬ not_closing (ectx_post y E ++ R).
+Proof.
+  revert y R. induction E as [|Ei E IH]; intros y R HR; [done|].
+  cbn [ectx_post]. rewrite -app_assoc. apply IH.
+  destruct Ei; [exact HR| |exact HR].
+  intros [? Hc]. by simpl in Hc.
+Qed.
+
+(** What follows a hole is empty, or closes the subproof whose last
+    line is the return of the hole *)
+Lemma ectx_post_ret y E :
+  (ectx_post y E = [] ∧ ectx_ret y E = y) ∨
+  ectx_ret y E ∈ referenced_lines (ectx_post y E).
+Proof.
+  revert y. induction E as [|Ei E IH]; intros y; [by left|].
+  change (ectx_ret y (Ei :: E)) with (ectx_ret (item_ret y Ei) E).
+  cbn [ectx_post]. rewrite referenced_lines_app elem_of_app.
+  destruct (IH (item_ret y Ei)) as [[-> ->]|?]; [|by right; left].
+  destruct Ei as [|x y' A B k|]; simpl; [by left|right; right; set_solver|by left].
+Qed.
+
+Lemma ectx_post_scs Γ E b C y a c :
+  body_typed Γ (fill E b) C -> ScopeClose a c ∈ ectx_post y E ->
+  a ∈ ectx_pre_binders E ∨ a ∈ ectx_post_binders E.
+Proof.
+  revert Γ C y. induction E as [|Ei E IH]; intros Γ C y Hb;
+    [by intros []%not_elem_of_nil|].
+  destruct (fill_item_typed _ _ _ _ Hb) as (Γ' & C' & Hb' & _ & _).
+  cbn [ectx_post]. rewrite ectx_pre_binders_cons ectx_post_binders_cons !elem_of_app.
+  intros [Hin|Hin]; [destruct (IH _ _ _ Hb' Hin); auto|].
+  destruct Ei as [|x y' A B k|]; simpl in Hin; [set_solver| |set_solver].
+  rewrite fill_cons /= in Hb. apply letsub_typed_inv in Hb as (_ & _ & Hk).
+  apply elem_of_cons in Hin as [[= -> _]|Hin]; [set_solver|].
+  right. right. simpl. right. by eapply body_scs_binders.
+Qed.
+
+(** Splitting at the closing line of the subproof [x] *)
+Lemma split_scope_close Γ s C x y y0 R Θ2 Θ3 :
+  Γ ⊢ s : C ->
+  ⦇s⦈ y ++ ScopeClose x y :: R = Θ2 ++ ScopeClose x y0 :: Θ3 ->
+  x ∉ body_binders s ->
+  (∀ a c, ScopeClose a c ∈ R -> a ≠ x) ->
+  Θ2 = ⦇s⦈ y ∧ y0 = y ∧ Θ3 = R.
+Proof.
+  intros Hs Heq Hx HR.
+  destruct (app_cons_unique (λ w, ∃ c, w = ScopeClose x c) _ _ _ _ _ _ Heq)
+    as (<- & [= <-] & <-); [eauto|eauto| | |done].
+  - intros w Hw (c & ->). by apply Hx, (body_scs_binders _ _ _ Hs y _ c).
+  - intros w Hw (c & ->). by apply (HR x c).
+Qed.
+
+(** The side condition of [split_scope_close] for a continuation [k]
+    followed by [post] *)
+Lemma deduct_of_body_scs_not Γ k C z post x :
+  Γ ⊢ k : C -> x ∉ body_binders k ->
+  (∀ a c, ScopeClose a c ∈ post -> a ≠ x) ->
+  ∀ a c, ScopeClose a c ∈ ⦇k⦈ z ++ post -> a ≠ x.
+Proof.
+  intros Hk Hx Hpost a c [Ha|Ha]%elem_of_app ->.
+  - by apply Hx, (body_scs_binders _ _ _ Hk z _ c).
+  - by apply (Hpost x c).
+Qed.
+
+(** * Translations of well-typed programs are valid deductions *)
+
+(** The converse of [ctx_ok]: the lines and subproofs in the typing
+    context [Γ] are in the scope of the frame stack [fs] *)
+Definition ctx_in_scope (fs : list frame) (Γ : ctx) : Prop :=
+  (∀ f i, (LVar i, TFrml f) ∈ Γ -> (f, i) ∈ concat (frame_lines <$> fs)) ∧
+  (∀ f1 i f2 j, (SVar i j, TSub f1 f2) ∈ Γ ->
+     SubProof f1 i f2 j ∈ concat (frame_subproofs <$> fs)).
+
+Lemma ctx_in_scope_add fr rest Γ A x :
+  ctx_in_scope (fr :: rest) Γ ->
+  ctx_in_scope (mkFrame (frame_lines fr ++ [(A, x)]) (frame_subproofs fr) :: rest)
+    ((LVar x, TFrml A) :: Γ).
+Proof.
+  intros [Hl Hs]. split; simpl.
+  - intros f i [[= -> ->]|Hi%Hl]%elem_of_cons; set_solver.
+  - intros f1 i f2 j [[=]|Hi%Hs]%elem_of_cons. done.
+Qed.
+
+Lemma ctx_in_scope_push fs Γ A x :
+  ctx_in_scope fs Γ ->
+  ctx_in_scope (mkFrame [(A, x)] [] :: fs) ((LVar x, TFrml A) :: Γ).
+Proof.
+  intros [Hl Hs]. split; simpl.
+  - intros f i [[= -> ->]|Hi%Hl]%elem_of_cons; set_solver.
+  - intros f1 i f2 j [[=]|Hi%Hs]%elem_of_cons. done.
+Qed.
+
+Lemma ctx_in_scope_close fr rest Γ A x B y :
+  ctx_in_scope (fr :: rest) Γ ->
+  ctx_in_scope (mkFrame (frame_lines fr) (frame_subproofs fr ++ [SubProof A x B y]) :: rest)
+    ((SVar x y, TSub A B) :: Γ).
+Proof.
+  intros [Hl Hs]. split; simpl.
+  - intros f i [[=]|Hi%Hl]%elem_of_cons. done.
+  - intros f1 i f2 j [[= -> -> -> ->]|Hi%Hs]%elem_of_cons; set_solver.
+Qed.
+
+Lemma ctx_in_scope_extend fr rest Γ L S :
+  ctx_in_scope (fr :: rest) Γ ->
+  ctx_in_scope (mkFrame (frame_lines fr ++ L) (frame_subproofs fr ++ S) :: rest) Γ.
+Proof.
+  intros [Hl Hs]. split; simpl.
+  - intros f i Hi%Hl. set_solver.
+  - intros f1 i f2 j Hi%Hs. set_solver.
+Qed.
+
+(** The converse of [just_ok_typed] *)
+Lemma just_ok_of_typed pre Γ o f :
+  ctx_in_scope (frame_stack pre) Γ -> Γ ⊢ₒ o : f -> just_ok pre f (just_of_op o).
+Proof.
+  intros [Hl Hs]. rewrite /just_ok /scope /sp_scope.
+  destruct 1; simpl; eauto 10.
+Qed.
+
+(** The translation of a well-typed body is valid after any valid
+    prefix [P] whose scope contains the context. Moreover, the body
+    extends the top frame. *)
+Lemma deduct_of_body_lines_ok Γ b C :
+  Γ ⊢ b : C -> ∀ P y fr rest,
+  lines_ok P ->
+  NoDup (lines_of_prededuct (P ++ ⦇b⦈ y)) ->
+  frame_stack P = fr :: rest ->
+  ctx_in_scope (fr :: rest) Γ ->
+  lines_ok (P ++ ⦇b⦈ y) ∧
+  ∃ L S, frame_stack (P ++ ⦇b⦈ y) =
+         mkFrame (frame_lines fr ++ L) (frame_subproofs fr ++ S) :: rest.
+Proof.
+  induction 1 as [Γ x A o k C Ho Hk IH|Γ x y' A B b k C Hb IHb Hk IHk|Γ A o Ho];
+    intros P y fr rest Hok Hnd Hfs Hctx.
+  - (* LET *)
+    rewrite deduct_of_let cons_middle app_assoc in Hnd |- *.
+    destruct (frame_stack_snoc_deduce P A (just_of_op o) x) as (? & ? & Hfs' & Hfs1).
+    rewrite Hfs in Hfs'. injection Hfs' as <- <-.
+    destruct (IH (P ++ [Deduce A (just_of_op o) x]) y
+                (mkFrame (frame_lines fr ++ [(A, x)]) (frame_subproofs fr)) rest)
+      as [Hok' (L & S & HL)];
+      [|done|done|by apply ctx_in_scope_add|].
+    { apply lines_ok_cons; [done|]. apply (just_ok_of_typed _ Γ); [by rewrite Hfs|done]. }
+    split; [done|]. exists ((A, x) :: L), S. by rewrite HL /= -app_assoc.
+  - (* LET SUB *)
+    rewrite deduct_of_letsub in Hnd |- *.
+    assert (P ++ [Raise A x] ++ ⦇b⦈ y' ++ [ScopeClose x y'] ++ ⦇k⦈ y =
+            (((P ++ [Raise A x]) ++ ⦇b⦈ y') ++ [ScopeClose x y']) ++ ⦇k⦈ y) as Heq
+      by (by rewrite -!app_assoc).
+    rewrite Heq in Hnd |- *.
+    (* the body of the subproof, in a new frame *)
+    destruct (IHb (P ++ [Raise A x]) y' (mkFrame [(A, x)] []) (fr :: rest))
+      as [Hok1 (L & S & HL)].
+    { by apply lines_ok_cons. }
+    { by do 2 eapply nodup_lines_prefix. }
+    { by rewrite frame_stack_snoc_raise Hfs. }
+    { by apply ctx_in_scope_push. }
+    (* closing the subproof *)
+    assert (Hlast : last ((P ++ [Raise A x]) ++ ⦇b⦈ y') =
+                    Some (Deduce B (just_of_op (ret_op b)) y')).
+    { by rewrite last_app last_deduct_of_body (body_typed_ret_ty _ _ _ Hb). }
+    assert (Hok2 : lines_ok (((P ++ [Raise A x]) ++ ⦇b⦈ y') ++ [ScopeClose x y'])).
+    { apply lines_ok_cons; [done|].
+      destruct (frame_stack_last_deduce _ _ _ _ Hlast) as (? & ? & Hfs0 & Hl0).
+      rewrite HL in Hfs0. injection Hfs0 as <- <-.
+      rewrite /line_ok Hlast HL /=. simpl in Hl0. by rewrite Hl0. }
+    assert (((P ++ [Raise A x]) ++ ⦇b⦈ y') ++ [ScopeClose x y'] =
+            P ++ Raise A x :: ⦇b⦈ y' ++ [ScopeClose x y']) as Heq'
+      by (by rewrite -!app_assoc).
+    rewrite Heq' in Hnd Hok2 |- *.
+    destruct (frame_stack_closed_block P A x (⦇b⦈ y') y')
+      as (? & ? & f2 & j & Hfs' & Hlast' & Hfs2); [done|by eapply nodup_lines_prefix|].
+    rewrite Hfs in Hfs'. injection Hfs' as <- <-.
+    rewrite last_deduct_of_body (body_typed_ret_ty _ _ _ Hb) in Hlast'.
+    injection Hlast' as <- _.
+    (* the continuation, which can use the subproof *)
+    destruct (IHk (P ++ Raise A x :: ⦇b⦈ y' ++ [ScopeClose x y']) y
+                (mkFrame (frame_lines fr) (frame_subproofs fr ++ [SubProof A x B y'])) rest)
+      as [Hok3 (L' & S' & HL')]; [done|done|done|by apply ctx_in_scope_close|].
+    split; [done|]. exists L', (SubProof A x B y' :: S'). by rewrite HL' /= -app_assoc.
+  - (* RETURN *)
+    destruct (frame_stack_snoc_deduce P A (just_of_op o) y) as (? & ? & Hfs' & Hfs1).
+    rewrite Hfs in Hfs'. injection Hfs' as <- <-. simpl.
+    split.
+    + apply lines_ok_cons; [done|]. apply (just_ok_of_typed _ Γ); [by rewrite Hfs|done].
+    + exists [(A, y)], []. by rewrite Hfs1 app_nil_r.
+Qed.
+
+(** The translation of a well-typed program is valid after any prefix
+    of assumptions whose scope contains the context *)
+Lemma deduct_of_term_lines_ok Γ p C :
+  Γ ⊢ₚ p : C -> ∀ P,
+  lines_ok P -> Forall is_assume P ->
+  NoDup (lines_of_prededuct (P ++ ⦇p⦈ᶜ)) ->
+  ctx_in_scope (frame_stack P) Γ ->
+  lines_ok (P ++ ⦇p⦈ᶜ) ∧ length (frame_stack (P ++ ⦇p⦈ᶜ)) = 1.
+Proof.
+  induction 1 as [Γ x A p C _ IH|Γ y b C Hb]; intros P Hok Has Hnd Hctx;
+    destruct (assume_run_stack P Has) as [base Hfs]; simpl in Hnd |- *.
+  - rewrite cons_middle app_assoc in Hnd |- *. apply IH; [| |done|].
+    + by apply lines_ok_cons.
+    + apply Forall_app. by split; [|apply Forall_singleton].
+    + rewrite frame_stack_snoc (frame_step_adds _ _ _ A x); [|constructor].
+      rewrite Hfs. apply ctx_in_scope_add. by rewrite -Hfs.
+  - destruct (deduct_of_body_lines_ok _ _ _ Hb P y base [])
+      as [? (L & S & ->)]; [done|done|done|by rewrite -Hfs|]. done.
+Qed.
+
+Theorem deduct_of_term_ok p C : prog_ok p C -> is_deduct ⦇p⦈ᶜ.
+Proof.
+  intros [Hnd Hty].
+  destruct (deduct_of_term_lines_ok _ _ _ Hty []) as [Hok Hlen].
+  - constructor.
+  - constructor.
+  - by rewrite /= lines_of_deduct_of_term.
+  - split; intros *; set_solver.
+  - split_and!; [done|done|by rewrite lines_of_deduct_of_term|].
+    by erewrite deduct_of_term_conclusion.
 Qed.

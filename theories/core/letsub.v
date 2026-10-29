@@ -33,8 +33,8 @@ of a Fitch proof. A subroutine variable [SVar x y] names a subroutine
 by its parameter [x] and its return variable [y], like a subproof is
 referred to by the range of its lines. *)
 Inductive var :=
-| LVar (x : nat)
-| SVar (x y : nat)
+| LVar (x : id)
+| SVar (x y : id)
 .
 
 #[global] Instance var_eqdecision : EqDecision var.
@@ -74,11 +74,11 @@ let-bindings in an ANF:
     parameter is bound in both places; the typing judgment checks that
     they agree. *)
 Inductive body :=
-| BLet (x : nat) (A : frml) (o : op) (k : body)
-| BLetSub (x y : nat) (A B : frml) (s : subr) (k : body)
+| BLet (x : id) (A : frml) (o : op) (k : body)
+| BLetSub (x y : id) (A B : frml) (s : subr) (k : body)
 | BRet (A : frml) (o : op)
 with subr :=
-| mkSubr (x : nat) (b : body)
+| mkSubr (x : id) (b : body)
 .
 
 Scheme body_mut := Induction for body Sort Prop
@@ -89,8 +89,8 @@ Combined Scheme body_subr_mut from body_mut, subr_mut.
     assumptions) followed by a body [PBody y b], written [{ b } AS y],
     where [y] is the return variable of the body. *)
 Inductive prog :=
-| PVar (x : nat) (A : frml) (p : prog)
-| PBody (y : nat) (b : body)
+| PVar (x : id) (A : frml) (p : prog)
+| PBody (y : id) (b : body)
 .
 
 (** * Notations *)
@@ -172,7 +172,7 @@ Notation "'VAR' x : A ; p" := (PVar x A p)
    p custom letsub at level 200,
    format "'[v' 'VAR'  x  :  A  ; '/' p ']'").
 
-(** * Unique names *)
+(** * Names and binders *)
 
 (** We assume that all bound line variables of a program are
     syntactically different. This is not part of the typing judgment,
@@ -180,18 +180,18 @@ Notation "'VAR' x : A ; p" := (PVar x A p)
     listed in the order of the lines of the Fitch proof: the return
     variable [y] of [LET SUB [x, y]] comes after the binders of the
     subroutine. *)
-Fixpoint body_binders (b : body) : list nat :=
+Fixpoint body_binders (b : body) : list id :=
   match b with
   | BLet x _ _ k => x :: body_binders k
   | BLetSub _ y _ _ s k => subr_binders s ++ y :: body_binders k
   | BRet _ _ => []
   end
-with subr_binders (s : subr) : list nat :=
+with subr_binders (s : subr) : list id :=
   match s with
   | mkSubr x b => x :: body_binders b
   end.
 
-Fixpoint prog_binders (p : prog) : list nat :=
+Fixpoint prog_binders (p : prog) : list id :=
   match p with
   | PVar x _ p' => x :: prog_binders p'
   | PBody y b => body_binders b ++ [y]
@@ -202,12 +202,40 @@ Definition names_unique (p : prog) : Prop := NoDup (prog_binders p).
 #[global] Instance names_unique_dec p : Decision (names_unique p).
 Proof. unfold names_unique. apply _. Defined.
 
-(** * Typing *)
+(** We will also need the notion of free names *)
+Definition op_vars (o : op) : list var :=
+  match o with
+  | OPair x y | OApply x y => [x; y]
+  | OProj _ x | OFunc x | OCpy x => [x]
+  end.
+
+Fixpoint body_fv (b : body) : list var :=
+  match b with
+  | BLet x _ o k => op_vars o ++ filter (λ v, v ≠ LVar x) (body_fv k)
+  | BLetSub x y _ _ (mkSubr x' b') k =>
+    filter (λ v, v ≠ LVar x') (body_fv b') ++
+    filter (λ v, v ≠ SVar x y) (body_fv k)
+  | BRet _ o => op_vars o
+  end.
 
 (** Typing contexts, most recent binding first. Like [scope] for Fitch
     proofs, variables are looked up by membership; this is unambiguous
     under [names_unique]. *)
 Definition ctx := list (var * ty).
+
+(** The line ids a variable stands for *)
+Definition var_ids (v : var) : list id :=
+  match v with
+  | LVar x => [x]
+  | SVar x y => [x; y]
+  end.
+
+Definition ctx_ids (Γ : ctx) : list id :=
+  Γ ≫= (λ '(v, _), var_ids v).
+
+
+
+(** * Typing *)
 
 (** The typing judgments for operations, bodies and programs *)
 Reserved Notation "Γ ⊢ₒ o : A"
@@ -274,15 +302,15 @@ where "Γ ⊢ₚ p : A" := (prog_typed Γ p A).
 Definition prog_ok (p : prog) (C : frml) : Prop :=
   names_unique p /\ [] ⊢ₚ p : C.
 
-(** * Evaluation contexts *)
+(** ** Evaluation contexts, names, and variables *)
 
 (** A context item is one layer of a body around a hole. The hole can
     be after a [LET] ([CLet]), inside a subroutine ([CSubBody]), or in
     the continuation after a subroutine ([CSubCont]). *)
 Inductive ectx_item :=
-| CLet (x : nat) (A : frml) (o : op)
-| CSubBody (x y : nat) (A B : frml) (k : body)
-| CSubCont (x y : nat) (A B : frml) (s : subr)
+| CLet (x : id) (A : frml) (o : op)
+| CSubBody (x y : id) (A B : frml) (k : body)
+| CSubCont (x y : id) (A B : frml) (s : subr)
 .
 
 (** Contexts are lists of items, outermost first; the empty list is
@@ -298,6 +326,46 @@ Definition fill_item (Ei : ectx_item) (b : body) : body :=
 
 Definition fill (E : ectx) (b : body) : body := foldr fill_item b E.
 
+(** The binders of a context, before and after the hole *)
+Definition item_pre_binders (Ei : ectx_item) : list id :=
+  match Ei with
+  | CLet x _ _ | CSubBody x _ _ _ _ => [x]
+  | CSubCont _ y _ _ s => subr_binders s ++ [y]
+  end.
+
+Definition item_post_binders (Ei : ectx_item) : list id :=
+  match Ei with
+  | CSubBody _ y _ _ k => y :: body_binders k
+  | _ => []
+  end.
+
+Definition ectx_pre_binders (E : ectx) : list id := E ≫= item_pre_binders.
+
+Definition ectx_post_binders (E : ectx) : list id :=
+  reverse E ≫= item_post_binders.
+
+(** Small lemmas about contexts *)
 Lemma fill_cons Ei E b : fill (Ei :: E) b = fill_item Ei (fill E b).
 Proof. done. Qed.
 
+Lemma ectx_pre_binders_cons Ei E :
+  ectx_pre_binders (Ei :: E) = item_pre_binders Ei ++ ectx_pre_binders E.
+Proof. done. Qed.
+
+Lemma ectx_post_binders_cons Ei E :
+  ectx_post_binders (Ei :: E) = ectx_post_binders E ++ item_post_binders Ei.
+Proof. by rewrite /ectx_post_binders reverse_cons bind_app /= app_nil_r. Qed.
+
+Lemma body_binders_fill_item Ei b :
+  body_binders (fill_item Ei b) =
+  item_pre_binders Ei ++ body_binders b ++ item_post_binders Ei.
+Proof. destruct Ei; simpl; by rewrite ?app_nil_r -?app_assoc. Qed.
+
+Lemma body_binders_fill E b :
+  body_binders (fill E b) =
+  ectx_pre_binders E ++ body_binders b ++ ectx_post_binders E.
+Proof.
+  induction E as [|Ei E IH]; [by rewrite /= app_nil_r|].
+  rewrite fill_cons body_binders_fill_item IH.
+  by rewrite ectx_pre_binders_cons ectx_post_binders_cons -!app_assoc.
+Qed.

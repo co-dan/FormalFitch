@@ -68,3 +68,67 @@ Proof.
         by eapply referenced_lines_restr_subset.
 Qed.
 
+(** * Congruence and inversion of garbage removal and independent swaps *)
+
+Lemma garb_step_cons s Σ Σ' :
+  garb_step Σ Σ' -> garb_step (s :: Σ) (s :: Σ').
+Proof.
+  destruct 1.
+  - by apply (garb_step_deduce (s :: Θ1)).
+  - by apply (garb_step_subproof (s :: Θ1)).
+Qed.
+
+Lemma garb_step_assume_inv A x Σ Σ' :
+  garb_step (Assume A x :: Σ) Σ' ->
+  ∃ Σ'', Σ' = Assume A x :: Σ'' ∧ garb_step Σ Σ''.
+Proof.
+  intros Hstep. remember (Assume A x :: Σ) as Σ0 eqn:HΣ.
+  destruct Hstep as [Θ1|Θ1]; (destruct Θ1 as [|s Θ1]; [discriminate|]);
+    injection HΣ as -> <-; (eexists; split; [done|]); by constructor.
+Qed.
+
+Lemma indep_step_cons s Σ Σ' :
+  indep_step Σ Σ' -> indep_step (s :: Σ) (s :: Σ').
+Proof.
+  destruct 1.
+  - by apply (indep_step_deduce_deduce (s :: Θ1)).
+  - by apply (indep_step_deduce_subproof (s :: Θ1)).
+  - by apply (indep_step_subproof_deduce (s :: Θ1)).
+  - by apply (indep_step_subproof_subproof (s :: Θ1)).
+Qed.
+
+Lemma indep_step_app_l Θ Σ Σ' :
+  indep_step Σ Σ' -> indep_step (Θ ++ Σ) (Θ ++ Σ').
+Proof. induction Θ; [done|]. intros. by apply indep_step_cons, IHΘ. Qed.
+
+Lemma indep_step_app_r Σ Σ' P :
+  indep_step Σ Σ' -> indep_step (Σ ++ P) (Σ' ++ P).
+Proof.
+  assert (∀ Θ, not_closing Θ -> not_closing (Θ ++ P)) as Hnc.
+  { intros [|s Θ] H; [by destruct H|exact H]. }
+  destruct 1; rewrite -!app_assoc;
+    [apply indep_step_deduce_deduce|apply indep_step_deduce_subproof
+    |apply indep_step_subproof_deduce|apply indep_step_subproof_subproof]; auto.
+  by intros [? _]%app_nil.
+Qed.
+
+Lemma indep_step_assume_inv A x Σ Σ' :
+  indep_step (Assume A x :: Σ) Σ' ->
+  ∃ Σ'', Σ' = Assume A x :: Σ'' ∧ indep_step Σ Σ''.
+Proof.
+  intros Hstep. remember (Assume A x :: Σ) as Σ0 eqn:HΣ.
+  destruct Hstep as [Θ1|Θ1|Θ1|Θ1]; (destruct Θ1 as [|s Θ1]; [discriminate|]);
+    injection HΣ as -> <-; (eexists; split; [done|]); by constructor.
+Qed.
+
+(** Garbage removal and independent swaps keep the conclusion *)
+Lemma garb_step_conclusion Σ Σ' :
+  garb_step Σ Σ' -> conclusion_of Σ' = conclusion_of Σ.
+Proof. destruct 1; rewrite ?app_assoc; by apply conclusion_of_mid. Qed.
+
+Lemma indep_step_conclusion Σ Σ' :
+  indep_step Σ Σ' -> conclusion_of Σ' = conclusion_of Σ.
+Proof.
+  destruct 1; rewrite ?app_assoc; apply conclusion_of_mid; try done;
+    intros ->; match goal with H : not_closing [] |- _ => by destruct H end.
+Qed.
