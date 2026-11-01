@@ -17,11 +17,11 @@ jobs:
       matrix:
         image:
           - 'rocq/rocq-prover:9.2'
-          - 'rocq/rocq-prover:9.3'
+          # - 'rocq/rocq-prover:9.3'
         experimental: [false]
-        include:
-          - image: 'rocq/rocq-prover:dev'
-            experimental: true
+        # include:
+        #   - image: 'rocq/rocq-prover:dev'
+        #     experimental: true
     steps:
       - uses: actions/checkout@v4
 
