@@ -1,0 +1,52 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The development version of Rocq may break at any time; do not fail the
+    # whole workflow because of it.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - 'rocq/rocq-prover:9.2'
+          - 'rocq/rocq-prover:9.3'
+        experimental: [false]
+        include:
+          - image: 'rocq/rocq-prover:dev'
+            experimental: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: coq-community/docker-coq-action@v1
+        with:
+          opam_file: 'fitch.opam'
+          custom_image: ${{ matrix.image }}
+          before_install: |
+            startGroup "Add the Iris opam repository (for the dev version of std++)"
+              opam repo add iris-dev https://gitlab.mpi-sws.org/iris/opam.git
+              opam update -y
+            endGroup
+            startGroup "Print opam config"
+              opam config list; opam repo list; opam list
+            endGroup
+          before_script: |
+            startGroup "Workaround permission issue"
+              sudo chown -R 1000:1000 .  # "coq" is the default user of the image
+            endGroup
+          script: |
+            startGroup "Build"
+              make -j2
+            endGroup
+
+      - name: Revert permissions
+        # to avoid a warning at cleanup time
+        if: ${{ always() }}
+        run: sudo chown -R 1001:116 .

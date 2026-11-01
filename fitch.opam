@@ -1,0 +1,17 @@
+opam-version: "2.0"
+name: "fitch"
+synopsis: "Fitch-style proofs and their computational interpretation"
+maintainer: "Dan Frum"
+authors: "Dan Frumin"
+homepage: "https://github.com/co-dan/FormalFitch"
+dev-repo: "git+https://github.com/co-dan/FormalFitch.git"
+bug-reports: "https://github.com/co-dan/FormalFitch/issues"
+
+depends: [
+  "rocq-core" {>= "9.2" & < "9.4~"}
+  "rocq-stdlib"
+  "rocq-stdpp" {(= "dev.2026-06-13.0.22033707") | (= "dev")}
+]
+
+build: [make "-j%{jobs}%"]
+install: [make "install"]
